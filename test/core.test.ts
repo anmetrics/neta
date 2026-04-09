@@ -1,0 +1,142 @@
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import neta, { createInstance, HTTPError, TimeoutError } from '../src/index.js';
+import { createTestServer, type TestServer } from './helpers.js';
+
+let server: TestServer;
+
+beforeAll(async () => {
+  server = await createTestServer((req, res) => {
+    const url = new URL(req.url!, `http://${req.headers.host}`);
+
+    if (url.pathname === '/json') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ hello: 'world' }));
+      return;
+    }
+
+    if (url.pathname === '/text') {
+      res.writeHead(200, { 'Content-Type': 'text/plain' });
+      res.end('hello world');
+      return;
+    }
+
+    if (url.pathname === '/echo') {
+      let body = '';
+      req.on('data', (c) => (body += c));
+      req.on('end', () => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            method: req.method,
+            headers: req.headers,
+            body,
+            url: req.url,
+          }),
+        );
+      });
+      return;
+    }
+
+    if (url.pathname === '/status') {
+      const code = Number(url.searchParams.get('code') ?? 200);
+      res.writeHead(code);
+      res.end();
+      return;
+    }
+
+    if (url.pathname === '/slow') {
+      setTimeout(() => {
+        res.writeHead(200);
+        res.end('done');
+      }, 5000);
+      return;
+    }
+
+    if (url.pathname === '/search') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ search: url.search }));
+      return;
+    }
+
+    res.writeHead(404);
+    res.end();
+  });
+});
+
+afterAll(async () => {
+  await server.close();
+});
+
+describe('neta', () => {
+  it('should make a GET request and parse JSON', async () => {
+    const data = await neta.get(`${server.url}/json`).json<{ hello: string }>();
+    expect(data).toEqual({ hello: 'world' });
+  });
+
+  it('should make a GET request and parse text', async () => {
+    const text = await neta.get(`${server.url}/text`).text();
+    expect(text).toBe('hello world');
+  });
+
+  it('should make a POST request with JSON body', async () => {
+    const data = await neta
+      .post(`${server.url}/echo`, { json: { foo: 'bar' } })
+      .json<{ method: string; body: string; headers: Record<string, string> }>();
+
+    expect(data.method).toBe('POST');
+    expect(JSON.parse(data.body)).toEqual({ foo: 'bar' });
+    expect(data.headers['content-type']).toBe('application/json');
+  });
+
+  it('should make PUT, PATCH, DELETE requests', async () => {
+    for (const method of ['put', 'patch', 'delete'] as const) {
+      const data = await neta[method](`${server.url}/echo`).json<{ method: string }>();
+      expect(data.method).toBe(method.toUpperCase());
+    }
+  });
+
+  it('should throw HTTPError on non-ok response', async () => {
+    await expect(neta.get(`${server.url}/status?code=404`)).rejects.toThrow(HTTPError);
+  });
+
+  it('should not throw when throwHttpErrors is false', async () => {
+    const response = await neta.get(`${server.url}/status?code=404`, {
+      throwHttpErrors: false,
+    });
+    expect(response.status).toBe(404);
+  });
+
+  it('should throw TimeoutError on timeout', async () => {
+    await expect(
+      neta.get(`${server.url}/slow`, { timeout: 100, retry: 0 }),
+    ).rejects.toThrow(TimeoutError);
+  });
+
+  it('should append search params', async () => {
+    const data = await neta
+      .get(`${server.url}/search`, { searchParams: { page: 2, limit: 10 } })
+      .json<{ search: string }>();
+    expect(data.search).toBe('?page=2&limit=10');
+  });
+
+  it('should support prefixUrl', async () => {
+    const api = createInstance({ prefixUrl: server.url });
+    const data = await api.get('json').json<{ hello: string }>();
+    expect(data).toEqual({ hello: 'world' });
+  });
+
+  it('should support instance creation with create/extend', async () => {
+    const api = neta.create({ prefixUrl: server.url });
+    const data = await api.get('json').json<{ hello: string }>();
+    expect(data).toEqual({ hello: 'world' });
+
+    const api2 = api.extend({ headers: { 'x-custom': 'test' } });
+    const echo = await api2.post('echo').json<{ headers: Record<string, string> }>();
+    expect(echo.headers['x-custom']).toBe('test');
+  });
+
+  it('should be usable as a direct callable', async () => {
+    const data = await neta(`${server.url}/json`, { method: 'get' }).json<{ hello: string }>();
+    expect(data).toEqual({ hello: 'world' });
+  });
+});
