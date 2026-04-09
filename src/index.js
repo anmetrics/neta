@@ -1,15 +1,18 @@
 import { HTTP_METHODS } from './constants.js';
 import { createResponsePromise } from './core.js';
+import { RetryMarker } from './types.js';
 import { mergeOptions, normalizeOptions } from './utils.js';
 
 /**
- * @param {import('./types.js').Options} [defaults]
- * @returns {import('./types.js').NetaInstance}
+ * @param {import('../types/types.js').Options} [defaults]
+ * @returns {import('../types/types.js').NetaInstance}
  */
 export function createInstance(defaults) {
   const fn = (input, options) => {
     const merged = mergeOptions(defaults, options);
     const normalized = normalizeOptions(merged);
+    // Stash user signal before we override it internally
+    normalized._userSignal = normalized.signal ?? undefined;
     return createResponsePromise(input, normalized);
   };
 
@@ -20,6 +23,13 @@ export function createInstance(defaults) {
   fn.create = (newDefaults) => createInstance(mergeOptions(defaults, newDefaults));
   fn.extend = fn.create;
 
+  /**
+   * Signal forced retry from an afterResponse hook.
+   * @param {{ delay?: number, request?: Request }} [options]
+   * @returns {RetryMarker}
+   */
+  fn.retry = (options) => new RetryMarker(options);
+
   return fn;
 }
 
@@ -27,5 +37,5 @@ const neta = createInstance();
 
 export default neta;
 export { neta };
-export { HTTPError, TimeoutError } from './errors.js';
+export { HTTPError, TimeoutError, NetworkError, ForceRetryError, SchemaValidationError } from './errors.js';
 export { stop } from './types.js';
