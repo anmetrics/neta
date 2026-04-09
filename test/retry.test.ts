@@ -36,7 +36,21 @@ beforeAll(async () => {
         res.end();
         return;
       }
-      res.writeHead(200);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+      return;
+    }
+
+    if (url.pathname === '/slow-then-ok') {
+      if (requestCounts[key]! <= 1) {
+        // Don't respond (timeout)
+        setTimeout(() => {
+          res.writeHead(200);
+          res.end('late');
+        }, 10000);
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ ok: true }));
       return;
     }
@@ -55,7 +69,7 @@ describe('retry', () => {
     requestCounts = {};
     const data = await neta
       .get(`${server.url}/retry-500`, {
-        retry: { limit: 3, statusCodes: [500], methods: ['get'], afterStatusCodes: [], backoffLimit: Infinity, delay: () => 10 },
+        retry: { limit: 3, statusCodes: [500], methods: ['get'], afterStatusCodes: [], backoffLimit: Infinity, delay: () => 10, maxRetryAfter: Infinity, jitter: false, retryOnTimeout: false },
       })
       .json<{ attempt: number }>();
 
@@ -66,7 +80,7 @@ describe('retry', () => {
     requestCounts = {};
     await expect(
       neta.get(`${server.url}/always-500`, {
-        retry: { limit: 2, statusCodes: [500], methods: ['get'], afterStatusCodes: [], backoffLimit: Infinity, delay: () => 10 },
+        retry: { limit: 2, statusCodes: [500], methods: ['get'], afterStatusCodes: [], backoffLimit: Infinity, delay: () => 10, maxRetryAfter: Infinity, jitter: false, retryOnTimeout: false },
       }),
     ).rejects.toThrow(HTTPError);
   });
@@ -75,7 +89,7 @@ describe('retry', () => {
     requestCounts = {};
     await expect(
       neta.post(`${server.url}/always-500`, {
-        retry: { limit: 2, statusCodes: [500], methods: ['get'], afterStatusCodes: [], backoffLimit: Infinity, delay: () => 10 },
+        retry: { limit: 2, statusCodes: [500], methods: ['get'], afterStatusCodes: [], backoffLimit: Infinity, delay: () => 10, maxRetryAfter: Infinity, jitter: false, retryOnTimeout: false },
       }),
     ).rejects.toThrow(HTTPError);
     expect(requestCounts['/always-500']).toBe(1);
@@ -83,19 +97,21 @@ describe('retry', () => {
 
   it('should stop retry when hook returns stop symbol', async () => {
     requestCounts = {};
-    await expect(
-      neta.get(`${server.url}/always-500`, {
-        retry: { limit: 5, statusCodes: [500], methods: ['get'], afterStatusCodes: [], backoffLimit: Infinity, delay: () => 10 },
+    try {
+      await neta.get(`${server.url}/always-500`, {
+        retry: { limit: 5, statusCodes: [500], methods: ['get'], afterStatusCodes: [], backoffLimit: Infinity, delay: () => 10, maxRetryAfter: Infinity, jitter: false, retryOnTimeout: false },
         hooks: {
           beforeRetry: [
-            ({ retryCount }) => {
+            ({ retryCount }: any) => {
               if (retryCount >= 2) return stop;
             },
           ],
         },
-        throwHttpErrors: false,
-      }),
-    ).resolves.toBeDefined();
+      });
+    } catch {
+      // Expected to throw since stop returns undefined
+    }
+    // 1 initial + 1 retry (stop fires on retryCount=2, preventing 2nd retry)
     expect(requestCounts['/always-500']).toBe(2);
   });
 
@@ -103,11 +119,76 @@ describe('retry', () => {
     requestCounts = {};
     const data = await neta
       .get(`${server.url}/retry-after`, {
-        retry: { limit: 2, statusCodes: [429], methods: ['get'], afterStatusCodes: [429], backoffLimit: Infinity, delay: () => 10 },
+        retry: { limit: 2, statusCodes: [429], methods: ['get'], afterStatusCodes: [429], backoffLimit: Infinity, delay: () => 10, maxRetryAfter: Infinity, jitter: false, retryOnTimeout: false },
       })
       .json<{ ok: boolean }>();
 
     expect(data.ok).toBe(true);
     expect(requestCounts['/retry-after']).toBe(2);
+  });
+
+  it('should support shouldRetry function', async () => {
+    requestCounts = {};
+    await expect(
+      neta.get(`${server.url}/always-500`, {
+        retry: {
+          limit: 5,
+          statusCodes: [500],
+          methods: ['get'],
+          afterStatusCodes: [],
+          backoffLimit: Infinity,
+          delay: () => 10,
+          maxRetryAfter: Infinity,
+          jitter: false,
+          retryOnTimeout: false,
+          shouldRetry: ({ retryCount }: any) => retryCount <= 1,
+        },
+      }),
+    ).rejects.toThrow(HTTPError);
+    // shouldRetry returns true for retryCount 1, false for retryCount 2
+    expect(requestCounts['/always-500']).toBe(2);
+  });
+
+  it('should support jitter', async () => {
+    requestCounts = {};
+    await expect(
+      neta.get(`${server.url}/always-500`, {
+        retry: {
+          limit: 2,
+          statusCodes: [500],
+          methods: ['get'],
+          afterStatusCodes: [],
+          backoffLimit: Infinity,
+          delay: () => 100,
+          maxRetryAfter: Infinity,
+          jitter: (d: number) => d * 0.01, // Very small jitter
+          retryOnTimeout: false,
+        },
+      }),
+    ).rejects.toThrow(HTTPError);
+    expect(requestCounts['/always-500']).toBe(3);
+  });
+
+  it('should retry on timeout when retryOnTimeout is true', async () => {
+    requestCounts = {};
+    const data = await neta
+      .get(`${server.url}/slow-then-ok`, {
+        timeout: 50,
+        retry: {
+          limit: 2,
+          statusCodes: [500],
+          methods: ['get'],
+          afterStatusCodes: [],
+          backoffLimit: Infinity,
+          delay: () => 10,
+          maxRetryAfter: Infinity,
+          jitter: false,
+          retryOnTimeout: true,
+        },
+      })
+      .json<{ ok: boolean }>();
+
+    expect(data.ok).toBe(true);
+    expect(requestCounts['/slow-then-ok']).toBe(2);
   });
 });

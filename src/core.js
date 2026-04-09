@@ -1,28 +1,27 @@
 import { HTTPError, TimeoutError, NetworkError, ForceRetryError, SchemaValidationError } from './errors.js';
-import { executeWithRetry, retryFromError } from './retry.js';
 import { RetryMarker } from './types.js';
+import { stop } from './types.js';
 import { streamResponse, streamRequest } from './stream.js';
 import {
   appendSearchParams,
   resolveInput,
   delay,
   isNetworkError,
+  applyJitter,
+  parseRetryAfter,
 } from './utils.js';
 import {
   maxSafeTimeout,
   responseTypes,
-  supportsAbortController,
-  supportsAbortSignal,
   supportsResponseStreams,
   supportsRequestStreams,
-  supportsFormData,
 } from './constants.js';
 
 const invalidSchemaMessage = 'The `schema` argument must follow the Standard Schema specification';
 
 /**
  * @param {unknown} jsonValue
- * @param {import('../types/types.js').StandardSchema} schema
+ * @param {any} schema
  * @returns {Promise<unknown>}
  */
 async function validateJsonWithSchema(jsonValue, schema) {
@@ -50,7 +49,7 @@ async function validateJsonWithSchema(jsonValue, schema) {
 /**
  * @param {number | false} timeout
  * @param {AbortSignal} [userSignal]
- * @returns {{ signal: AbortSignal, cleanup: () => void, controller: AbortController }}
+ * @returns {{ signal: AbortSignal, cleanup: () => void }}
  */
 function createManagedSignal(timeout, userSignal) {
   const controller = new AbortController();
@@ -61,7 +60,6 @@ function createManagedSignal(timeout, userSignal) {
     timer = setTimeout(() => controller.abort('timeout'), timeout);
   }
 
-  // Combine with user signal
   if (userSignal) {
     if (userSignal.aborted) {
       controller.abort(userSignal.reason);
@@ -72,7 +70,6 @@ function createManagedSignal(timeout, userSignal) {
 
   return {
     signal: controller.signal,
-    controller,
     cleanup: () => {
       if (timer) clearTimeout(timer);
     },
@@ -106,26 +103,23 @@ async function readResponseText(response, timeoutMs) {
   const decoder = new TextDecoder();
   const chunks = [];
   let totalBytes = 0;
-  const maxSize = 10 * 1024 * 1024; // 10MB
+  const maxSize = 10 * 1024 * 1024;
 
   const readAll = (async () => {
     try {
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
-
         totalBytes += value.byteLength;
         if (totalBytes > maxSize) {
           void reader.cancel().catch(() => {});
           return undefined;
         }
-
         chunks.push(decoder.decode(value, { stream: true }));
       }
     } catch {
       return undefined;
     }
-
     chunks.push(decoder.decode());
     return chunks.join('');
   })();
@@ -136,18 +130,14 @@ async function readResponseText(response, timeoutMs) {
   });
 
   const result = await Promise.race([readAll, timeoutPromise]);
-  if (result === undefined) {
-    void reader.cancel().catch(() => {});
-  }
-
+  if (result === undefined) void reader.cancel().catch(() => {});
   return result;
 }
 
 /**
- * Get response data (for HTTPError.data).
  * @param {Response} response
  * @param {number} timeoutMs
- * @param {import('../types/types.js').InternalOptions} options
+ * @param {any} options
  * @param {Request} request
  * @returns {Promise<unknown>}
  */
@@ -157,7 +147,6 @@ async function getResponseData(response, timeoutMs, options, request) {
 
   const contentType = (response.headers.get('content-type') ?? '').split(';', 1)[0].trim().toLowerCase();
   const isJson = /\/(?:.*[.+-])?json$/.test(contentType);
-
   if (!isJson) return text;
 
   try {
@@ -170,9 +159,9 @@ async function getResponseData(response, timeoutMs, options, request) {
 }
 
 /**
- * Strip internal-only options to produce NormalizedOptions for hooks.
- * @param {import('../types/types.js').InternalOptions} options
- * @returns {import('../types/types.js').NormalizedOptions}
+ * Strip internal-only options.
+ * @param {any} options
+ * @returns {any}
  */
 function getNormalizedOptions(options) {
   const {
@@ -186,9 +175,21 @@ function getNormalizedOptions(options) {
 }
 
 /**
+ * Calculate retry delay.
+ * @param {any} retry
+ * @param {number} retryCount
+ * @returns {number}
+ */
+function calculateDelay(retry, retryCount) {
+  const base = retry.delay(retryCount);
+  const jittered = applyJitter(base, retry.jitter);
+  return Math.min(retry.backoffLimit, jittered);
+}
+
+/**
  * @param {string | URL | Request} input
- * @param {import('../types/types.js').InternalOptions} options
- * @returns {import('../types/types.js').ResponsePromise}
+ * @param {any} options
+ * @returns {any}
  */
 export function createResponsePromise(input, options) {
   // Run init hooks (synchronous, mutate options clone)
@@ -198,18 +199,30 @@ export function createResponsePromise(input, options) {
 
   let retryCount = 0;
   const startTime = typeof options.totalTimeout === 'number' ? performance.now() : undefined;
+  /** @type {Request} */
   let currentRequest;
-  let abortController;
-  const beforeRetryHookErrors = new WeakSet();
 
-  const state = {
-    getRetryCount: () => retryCount,
-    setRetryCount: (n) => { retryCount = n; },
-    getStartTime: () => startTime,
+  const getRemainingTotalTimeout = () => {
+    if (startTime === undefined) return undefined;
+    const elapsed = performance.now() - startTime;
+    return Math.max(0, options.totalTimeout - elapsed);
+  };
+
+  const getEffectiveTimeout = () => {
+    const remaining = getRemainingTotalTimeout();
+    if (options.timeout === false) return remaining;
+    if (remaining === undefined) return options.timeout;
+    return Math.min(options.timeout, remaining);
+  };
+
+  const throwIfTotalTimeoutExhausted = () => {
+    const remaining = getRemainingTotalTimeout();
+    if (remaining !== undefined && remaining <= 0) {
+      throw new TimeoutError(currentRequest);
+    }
   };
 
   const innerPromise = (async () => {
-    // Validate timeouts
     if (typeof options.timeout === 'number' && options.timeout > maxSafeTimeout) {
       throw new RangeError(`The \`timeout\` option cannot be greater than ${maxSafeTimeout}`);
     }
@@ -222,7 +235,7 @@ export function createResponsePromise(input, options) {
     let url = new URL(inputStr);
     url = appendSearchParams(url, options.searchParams);
 
-    // Build request init
+    // Build request init (strip neta-specific options)
     const {
       prefix: _prefix, baseUrl: _baseUrl, retry, timeout, totalTimeout,
       hooks, searchParams, json, throwHttpErrors, fetch: fetchFn,
@@ -236,8 +249,10 @@ export function createResponsePromise(input, options) {
       method: options.method.toUpperCase(),
     });
 
+    // Defer so body shortcuts can set Accept header
+    await Promise.resolve();
+
     // beforeRequest hooks
-    await Promise.resolve(); // Defer so body shortcuts can set Accept header
     for (const hook of hooks.beforeRequest) {
       const result = await hook({
         request: currentRequest,
@@ -245,44 +260,23 @@ export function createResponsePromise(input, options) {
         retryCount: 0,
       });
 
-      if (result instanceof Response) {
-        return result;
-      }
-
-      if (result instanceof Request) {
-        currentRequest = result;
-      }
+      if (result instanceof Response) return result;
+      if (result instanceof Request) currentRequest = result;
     }
 
-    // Setup abort/timeout
     const userSignal = options._userSignal;
 
-    const getEffectiveTimeout = () => {
-      const remaining = getRemainingTotalTimeout();
-      if (options.timeout === false) return remaining;
-      if (remaining === undefined) return options.timeout;
-      return Math.min(options.timeout, remaining);
-    };
-
-    const getRemainingTotalTimeout = () => {
-      if (startTime === undefined) return undefined;
-      const elapsed = performance.now() - startTime;
-      return Math.max(0, /** @type {number} */ (options.totalTimeout) - elapsed);
-    };
-
-    const makeFetch = async () => {
-      // Reset abort controller for retries
+    /**
+     * Perform a single fetch attempt with timeout.
+     * @returns {Promise<Response>}
+     */
+    const doFetch = async () => {
       const effectiveTimeout = getEffectiveTimeout();
       const remaining = getRemainingTotalTimeout();
-
-      if (remaining !== undefined && remaining <= 0) {
-        throw new TimeoutError(currentRequest);
-      }
+      if (remaining !== undefined && remaining <= 0) throw new TimeoutError(currentRequest);
 
       const managed = createManagedSignal(effectiveTimeout, userSignal);
-      abortController = managed.controller;
 
-      // Handle upload progress
       let fetchRequest = currentRequest.clone();
       if (onUploadProgress && fetchRequest.body && supportsRequestStreams) {
         fetchRequest = streamRequest(fetchRequest, onUploadProgress, options.body);
@@ -294,28 +288,136 @@ export function createResponsePromise(input, options) {
         return response;
       } catch (error) {
         managed.cleanup();
-
         if (managed.signal.aborted && managed.signal.reason === 'timeout') {
           throw new TimeoutError(currentRequest);
         }
-
         if (isNetworkError(error)) {
           throw new NetworkError(currentRequest, { cause: error });
         }
-
         throw error;
       }
     };
 
-    // Execute with retry
-    let response = await executeWithRetry(makeFetch, currentRequest, options, state);
+    /**
+     * Attempt retry: wait, run beforeRetry hooks, then fetch again.
+     * @param {Error} error
+     * @param {number} delayMs
+     * @returns {Promise<Response | typeof stop>}
+     */
+    const attemptRetry = async (error, delayMs) => {
+      const safeDelay = Math.min(delayMs, maxSafeTimeout);
+      const delayOptions = { signal: userSignal };
 
-    if (!(response instanceof Response)) return response;
+      const remaining = getRemainingTotalTimeout();
+      if (remaining !== undefined) {
+        if (remaining <= 0) throw new TimeoutError(currentRequest);
+        if (safeDelay >= remaining) {
+          await delay(remaining, delayOptions);
+          throw new TimeoutError(currentRequest);
+        }
+      }
 
+      await delay(safeDelay, delayOptions);
+      throwIfTotalTimeoutExhausted();
+
+      // Run beforeRetry hooks
+      for (const hook of hooks.beforeRetry) {
+        const result = await hook({
+          request: currentRequest,
+          options: getNormalizedOptions(options),
+          error,
+          retryCount: retryCount + 1,
+        });
+
+        if (result instanceof Request) { currentRequest = result; break; }
+        if (result instanceof Response) { retryCount++; return result; }
+        if (result === stop) return stop;
+      }
+
+      throwIfTotalTimeoutExhausted();
+      retryCount++;
+      return doFetch();
+    };
+
+    /**
+     * Check if we should retry a fetch-level error (timeout, network).
+     * @param {Error} error
+     * @returns {Promise<number>} delay in ms, or throws if no retry
+     */
+    const getRetryDelayForFetchError = async (error) => {
+      if (retryCount >= retry.limit) throw error;
+      if (!retry.methods.includes(options.method)) throw error;
+
+      if (retry.shouldRetry !== undefined) {
+        const result = await retry.shouldRetry({ error, retryCount: retryCount + 1 });
+        if (result === false) throw error;
+        if (result === true) return calculateDelay(retry, retryCount + 1);
+      }
+
+      if (error instanceof TimeoutError) {
+        if (!retry.retryOnTimeout) throw error;
+        return calculateDelay(retry, retryCount + 1);
+      }
+
+      if (error instanceof NetworkError) {
+        return calculateDelay(retry, retryCount + 1);
+      }
+
+      throw error;
+    };
+
+    /**
+     * Check if we should retry an HTTP error.
+     * @param {HTTPError} error
+     * @returns {Promise<number>} delay in ms, or throws if no retry
+     */
+    const getRetryDelayForHttpError = async (error) => {
+      if (retryCount >= retry.limit) throw error;
+      if (!retry.methods.includes(options.method)) throw error;
+
+      if (retry.shouldRetry !== undefined) {
+        const result = await retry.shouldRetry({ error, retryCount: retryCount + 1 });
+        if (result === false) throw error;
+        if (result === true) return calculateDelay(retry, retryCount + 1);
+      }
+
+      if (!retry.statusCodes.includes(error.response.status)) throw error;
+
+      // Handle Retry-After
+      if (retry.afterStatusCodes.includes(error.response.status)) {
+        const retryAfter = parseRetryAfter(error.response);
+        if (retryAfter !== undefined) {
+          return Math.min(retry.maxRetryAfter, Math.max(0, retryAfter));
+        }
+      }
+
+      if (error.response.status === 413) throw error;
+
+      return calculateDelay(retry, retryCount + 1);
+    };
+
+    // === Main request loop ===
+    /** @type {Response} */
+    let response;
+
+    // Initial fetch with fetch-error retry loop
+    for (;;) {
+      try {
+        response = await doFetch();
+        break;
+      } catch (error) {
+        const retryDelay = await getRetryDelayForFetchError(error);
+        const retryResult = await attemptRetry(error, retryDelay);
+        if (retryResult === stop) return undefined;
+        if (retryResult instanceof Response) { response = retryResult; break; }
+      }
+    }
+
+    // afterResponse hooks + HTTP error retry loop
     let responseFromHook = false;
 
-    // afterResponse hooks (with ForceRetry support)
     for (;;) {
+      // Run afterResponse hooks
       try {
         for (const hook of hooks.afterResponse) {
           const clonedResponse = response.clone();
@@ -337,14 +439,20 @@ export function createResponsePromise(input, options) {
       } catch (error) {
         if (!(error instanceof ForceRetryError)) throw error;
 
-        const retriedResponse = await retryFromError(error, makeFetch, currentRequest, options, state);
-        if (!(retriedResponse instanceof Response)) return retriedResponse;
-        response = retriedResponse;
-        responseFromHook = true;
+        // Forced retry from afterResponse hook
+        const retryDelay = error.customDelay ?? calculateDelay(retry, retryCount + 1);
+        if (error.customRequest) currentRequest = error.customRequest;
+        const retryResult = await attemptRetry(error, retryDelay);
+        if (retryResult === stop) return undefined;
+        if (retryResult instanceof Response) {
+          response = retryResult;
+          responseFromHook = true;
+          continue;
+        }
         continue;
       }
 
-      // Throw on HTTP errors
+      // Check HTTP errors
       const shouldThrow = typeof throwHttpErrors === 'function'
         ? throwHttpErrors(response.status)
         : throwHttpErrors;
@@ -353,17 +461,39 @@ export function createResponsePromise(input, options) {
         const error = new HTTPError(response, currentRequest, getNormalizedOptions(options));
         error.data = await getResponseData(
           response,
-          options.timeout === false ? 10_000 : /** @type {number} */ (options.timeout),
+          options.timeout === false ? 10_000 : options.timeout,
           options,
           currentRequest,
         );
 
         if (responseFromHook) throw error;
 
-        const retriedResponse = await retryFromError(error, makeFetch, currentRequest, options, state).catch((e) => { throw e; });
-        if (!(retriedResponse instanceof Response)) return retriedResponse;
-        response = retriedResponse;
-        responseFromHook = true;
+        // Try to retry
+        let retryDelay;
+        try {
+          retryDelay = await getRetryDelayForHttpError(error);
+        } catch {
+          // Run beforeError hooks, then throw
+          let processedError = error;
+          for (const hook of hooks.beforeError) {
+            const hookResult = await hook({
+              request: currentRequest,
+              options: getNormalizedOptions(options),
+              error: processedError,
+              retryCount,
+            });
+            if (hookResult instanceof Error) processedError = hookResult;
+          }
+          throw processedError;
+        }
+
+        const retryResult = await attemptRetry(error, retryDelay);
+        if (retryResult === stop) return undefined;
+        if (retryResult instanceof Response) {
+          response = retryResult;
+          responseFromHook = false; // Allow further retries
+          continue;
+        }
         continue;
       }
 
@@ -372,9 +502,8 @@ export function createResponsePromise(input, options) {
 
     // Decorate response with custom parseJson
     if (options.parseJson) {
-      const originalJson = response.json.bind(response);
       response.json = async () => {
-        const text = await response.text();
+        const text = await response.clone().text();
         if (text === '') return JSON.parse(text);
         return options.parseJson(text, { request: currentRequest, response });
       };
@@ -386,16 +515,16 @@ export function createResponsePromise(input, options) {
         throw new TypeError('The `onDownloadProgress` option must be a function');
       }
       if (!supportsResponseStreams) {
-        throw new Error('Streams are not supported in your environment. `ReadableStream` is missing.');
+        throw new Error('Streams are not supported. `ReadableStream` is missing.');
       }
-
       return streamResponse(response, onDownloadProgress);
     }
 
     return response;
   })();
 
-  // Build ResponsePromise thenable with body shortcuts
+  // Build ResponsePromise thenable
+  /** @type {any} */
   const responsePromise = {
     then: innerPromise.then.bind(innerPromise),
     catch: innerPromise.catch.bind(innerPromise),
@@ -403,26 +532,18 @@ export function createResponsePromise(input, options) {
     [Symbol.toStringTag]: 'ResponsePromise',
   };
 
-  // Add body method shortcuts
   for (const [type, mimeType] of Object.entries(responseTypes)) {
     responsePromise[type] = async (schema) => {
-      // Set Accept header
       if (currentRequest) {
         currentRequest.headers.set('accept', currentRequest.headers.get('accept') || mimeType);
       }
 
       const response = await innerPromise;
+      if (type !== 'json') return response[type]();
 
-      if (type !== 'json') {
-        return response[type]();
-      }
-
-      // JSON with optional schema validation
       const text = await response.text();
       if (text === '') {
-        if (schema !== undefined) {
-          return validateJsonWithSchema(undefined, schema);
-        }
+        if (schema !== undefined) return validateJsonWithSchema(undefined, schema);
         return JSON.parse(text);
       }
 

@@ -34,12 +34,28 @@ afterAll(async () => {
 });
 
 describe('hooks', () => {
+  it('init hook can mutate options', async () => {
+    const data = await neta
+      .get(`${server.url}/echo-headers`, {
+        hooks: {
+          init: [
+            (options: any) => {
+              options.headers = { ...options.headers, 'x-init': 'from-init-hook' };
+            },
+          ],
+        },
+      })
+      .json<{ headers: Record<string, string> }>();
+
+    expect(data.headers['x-init']).toBe('from-init-hook');
+  });
+
   it('beforeRequest hook can modify request', async () => {
     const data = await neta
       .get(`${server.url}/echo-headers`, {
         hooks: {
           beforeRequest: [
-            (request) => {
+            ({ request }) => {
               const headers = new Headers(request.headers);
               headers.set('x-injected', 'from-hook');
               return new Request(request, { headers });
@@ -56,7 +72,7 @@ describe('hooks', () => {
     const response = await neta.get(`${server.url}/json`, {
       hooks: {
         afterResponse: [
-          (_req, _opts, response) => {
+          ({ response }) => {
             return new Response(JSON.stringify({ modified: true }), {
               status: response.status,
               headers: response.headers,
@@ -76,7 +92,7 @@ describe('hooks', () => {
         retry: 0,
         hooks: {
           beforeError: [
-            (error) => {
+            ({ error }) => {
               (error as HTTPError & { customMessage: string }).customMessage = 'modified';
               return error;
             },

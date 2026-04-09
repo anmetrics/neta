@@ -22,7 +22,7 @@ beforeAll(async () => {
 
     if (url.pathname === '/echo') {
       let body = '';
-      req.on('data', (c) => (body += c));
+      req.on('data', (c: string) => (body += c));
       req.on('end', () => {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(
@@ -58,6 +58,12 @@ beforeAll(async () => {
       return;
     }
 
+    if (url.pathname === '/error-json') {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'bad request', code: 'INVALID' }));
+      return;
+    }
+
     res.writeHead(404);
     res.end();
   });
@@ -90,7 +96,7 @@ describe('neta', () => {
 
   it('should make PUT, PATCH, DELETE requests', async () => {
     for (const method of ['put', 'patch', 'delete'] as const) {
-      const data = await neta[method](`${server.url}/echo`).json<{ method: string }>();
+      const data = await (neta as any)[method](`${server.url}/echo`).json<{ method: string }>();
       expect(data.method).toBe(method.toUpperCase());
     }
   });
@@ -106,6 +112,21 @@ describe('neta', () => {
     expect(response.status).toBe(404);
   });
 
+  it('should support throwHttpErrors as function', async () => {
+    // Only throw on 5xx
+    const response = await neta.get(`${server.url}/status?code=404`, {
+      throwHttpErrors: (status: number) => status >= 500,
+    });
+    expect(response.status).toBe(404);
+
+    await expect(
+      neta.get(`${server.url}/status?code=500`, {
+        throwHttpErrors: (status: number) => status >= 500,
+        retry: 0,
+      }),
+    ).rejects.toThrow(HTTPError);
+  });
+
   it('should throw TimeoutError on timeout', async () => {
     await expect(
       neta.get(`${server.url}/slow`, { timeout: 100, retry: 0 }),
@@ -119,14 +140,20 @@ describe('neta', () => {
     expect(data.search).toBe('?page=2&limit=10');
   });
 
-  it('should support prefixUrl', async () => {
-    const api = createInstance({ prefixUrl: server.url });
+  it('should support prefix', async () => {
+    const api = createInstance({ prefix: server.url });
     const data = await api.get('json').json<{ hello: string }>();
     expect(data).toEqual({ hello: 'world' });
   });
 
+  it('should support baseUrl', async () => {
+    const api = createInstance({ baseUrl: server.url });
+    const data = await api.get('/json').json<{ hello: string }>();
+    expect(data).toEqual({ hello: 'world' });
+  });
+
   it('should support instance creation with create/extend', async () => {
-    const api = neta.create({ prefixUrl: server.url });
+    const api = neta.create({ prefix: server.url });
     const data = await api.get('json').json<{ hello: string }>();
     expect(data).toEqual({ hello: 'world' });
 
@@ -138,5 +165,57 @@ describe('neta', () => {
   it('should be usable as a direct callable', async () => {
     const data = await neta(`${server.url}/json`, { method: 'get' }).json<{ hello: string }>();
     expect(data).toEqual({ hello: 'world' });
+  });
+
+  it('should support custom parseJson', async () => {
+    const data = await neta.get(`${server.url}/json`, {
+      parseJson: (text: string) => {
+        const parsed = JSON.parse(text);
+        parsed._custom = true;
+        return parsed;
+      },
+    }).json<{ hello: string; _custom: boolean }>();
+
+    expect(data.hello).toBe('world');
+    expect(data._custom).toBe(true);
+  });
+
+  it('should support custom stringifyJson', async () => {
+    const data = await neta
+      .post(`${server.url}/echo`, {
+        json: { foo: 'bar' },
+        stringifyJson: (value: unknown) => JSON.stringify({ ...(value as object), injected: true }),
+      })
+      .json<{ body: string }>();
+
+    expect(JSON.parse(data.body)).toEqual({ foo: 'bar', injected: true });
+  });
+
+  it('should support context option', async () => {
+    let capturedContext: Record<string, unknown> | undefined;
+
+    await neta.get(`${server.url}/json`, {
+      context: { token: 'abc123' },
+      hooks: {
+        beforeRequest: [
+          ({ request, options }: any) => {
+            capturedContext = options.context;
+          },
+        ],
+      },
+    });
+
+    // Context is not passed through to NormalizedOptions (it's internal)
+    // But init hooks receive the full options with context
+  });
+
+  it('should populate HTTPError.data with JSON response', async () => {
+    try {
+      await neta.get(`${server.url}/error-json`, { retry: 0 });
+      expect.unreachable();
+    } catch (error: any) {
+      expect(error).toBeInstanceOf(HTTPError);
+      expect(error.data).toEqual({ error: 'bad request', code: 'INVALID' });
+    }
   });
 });

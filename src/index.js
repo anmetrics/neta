@@ -38,4 +38,6 @@ const neta = createInstance();
 export default neta;
 export { neta };
 export { HTTPError, TimeoutError, NetworkError, ForceRetryError, SchemaValidationError } from './errors.js';
+export { HTTPError as NetaError } from './errors.js';
+export { createInstance as NetaClient };
 export { stop } from './types.js';

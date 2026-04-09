@@ -1,6 +1,6 @@
-import type { NormalizedOptions, ResponsePromise } from './types.js';
+import type { InternalOptions, ResponsePromise } from './types.js';
 
 export declare function createResponsePromise(
   input: string | URL | Request,
-  options: NormalizedOptions,
+  options: InternalOptions,
 ): ResponsePromise;

@@ -1,25 +1,20 @@
 {
-  "name": "neta",
+  "name": "@anmetric/neta",
   "version": "0.1.0",
   "description": "Tiny, elegant HTTP client built on fetch for browser and Node.js",
   "type": "module",
   "exports": {
     ".": {
-      "import": {
-        "types": "./types/index.d.ts",
-        "default": "./dist/index.js"
-      },
-      "require": {
-        "types": "./types/index.d.ts",
-        "default": "./dist/index.cjs"
-      }
+      "types": "./types/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
     }
   },
+  "sideEffects": false,
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
   "types": "./types/index.d.ts",
   "files": [
-    "src",
     "dist",
     "types"
   ],
