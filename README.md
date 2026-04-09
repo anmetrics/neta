@@ -10,7 +10,7 @@
 ## Install
 
 ```sh
-npm install neta
+npm install @anmetric/neta
 ```
 
 ## Quick Start
