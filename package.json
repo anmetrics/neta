@@ -1,6 +1,6 @@
 {
   "name": "@anmetric/neta",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "Tiny, elegant HTTP client built on fetch for browser and Node.js",
   "type": "module",
   "exports": {
