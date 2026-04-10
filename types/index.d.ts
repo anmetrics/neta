@@ -29,7 +29,6 @@ export type {
   ResponsePromise,
   RetryMarker,
   RetryOptions,
-  SchemaValidationError as SchemaValidationErrorType,
   SearchParamsInit,
   StandardSchema,
   UploadProgress,

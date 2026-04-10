@@ -16,18 +16,20 @@ npm install @anmetric/neta
 ## Quick Start
 
 ```js
-import neta from 'neta';
+import neta from "@anmetric/neta";
 
 // GET with JSON parsing
-const data = await neta.get('https://api.example.com/users').json();
+const data = await neta.get("https://api.example.com/users").json();
 
 // POST with JSON body
-const user = await neta.post('https://api.example.com/users', {
-  json: { name: 'John', email: 'john@example.com' },
-}).json();
+const user = await neta
+  .post("https://api.example.com/users", {
+    json: { name: "John", email: "john@example.com" },
+  })
+  .json();
 
 // Direct callable
-const res = await neta('https://api.example.com/users', { method: 'get' });
+const res = await neta("https://api.example.com/users", { method: "get" });
 ```
 
 ## API
@@ -53,9 +55,11 @@ Type: `unknown`
 JSON body. Automatically stringified and sets `Content-Type: application/json`.
 
 ```js
-const data = await neta.post('https://api.example.com/items', {
-  json: { title: 'New Item' },
-}).json();
+const data = await neta
+  .post("https://api.example.com/items", {
+    json: { title: "New Item" },
+  })
+  .json();
 ```
 
 ##### searchParams
@@ -65,9 +69,11 @@ Type: `string | object | URLSearchParams | Array<[string, string]>`
 Query parameters appended to the URL.
 
 ```js
-const data = await neta.get('https://api.example.com/search', {
-  searchParams: { q: 'hello', page: 2 },
-}).json();
+const data = await neta
+  .get("https://api.example.com/search", {
+    searchParams: { q: "hello", page: 2 },
+  })
+  .json();
 // => GET https://api.example.com/search?q=hello&page=2
 ```
 
@@ -80,9 +86,9 @@ Type: `string | URL`
 Prefix prepended to the input URL. Useful for API base paths.
 
 ```js
-const api = neta.create({ prefix: 'https://api.example.com/v2' });
+const api = neta.create({ prefix: "https://api.example.com/v2" });
 
-await api.get('users').json();
+await api.get("users").json();
 // => GET https://api.example.com/v2/users
 ```
 
@@ -93,12 +99,12 @@ Type: `string | URL`
 Base URL for resolving relative inputs using standard [URL resolution](https://developer.mozilla.org/en-US/docs/Web/API/URL/URL).
 
 ```js
-const api = neta.create({ baseUrl: 'https://api.example.com/v2/' });
+const api = neta.create({ baseUrl: "https://api.example.com/v2/" });
 
-await api.get('users').json();
+await api.get("users").json();
 // => GET https://api.example.com/v2/users
 
-await api.get('../v1/legacy').json();
+await api.get("../v1/legacy").json();
 // => GET https://api.example.com/v1/legacy
 ```
 
@@ -117,7 +123,7 @@ Default: `false`
 Total timeout across all retries in milliseconds.
 
 ```js
-await neta.get('https://api.example.com/slow', {
+await neta.get("https://api.example.com/slow", {
   timeout: 5000,
   totalTimeout: 30000,
   retry: 5,
@@ -139,7 +145,7 @@ await neta.get(url, { retry: 3 });
 await neta.get(url, {
   retry: {
     limit: 3,
-    methods: ['get', 'put', 'head', 'delete', 'options'],
+    methods: ["get", "put", "head", "delete", "options"],
     statusCodes: [408, 413, 429, 500, 502, 503, 504],
     afterStatusCodes: [413, 429, 503],
     maxRetryAfter: Infinity,
@@ -274,11 +280,13 @@ Type: `(text: string, context: { request, response }) => unknown`
 Custom JSON parser. Useful for reviving dates, BigInts, etc.
 
 ```js
-import LosslessJSON from 'lossless-json';
+import LosslessJSON from "lossless-json";
 
-const data = await neta.get(url, {
-  parseJson: (text) => LosslessJSON.parse(text),
-}).json();
+const data = await neta
+  .get(url, {
+    parseJson: (text) => LosslessJSON.parse(text),
+  })
+  .json();
 ```
 
 ##### stringifyJson
@@ -288,7 +296,7 @@ Type: `(value: unknown) => string`
 Custom JSON serializer for the `json` option.
 
 ```js
-import LosslessJSON from 'lossless-json';
+import LosslessJSON from "lossless-json";
 
 await neta.post(url, {
   json: data,
@@ -303,15 +311,17 @@ Type: `string`
 Convenience option to set the `Authorization: Bearer <token>` header. If an `Authorization` header is already set explicitly, `bearerToken` will not override it.
 
 ```js
-const data = await neta.get('https://api.example.com/me', {
-  bearerToken: 'abc123',
-}).json();
+const data = await neta
+  .get("https://api.example.com/me", {
+    bearerToken: "abc123",
+  })
+  .json();
 // Sets header: Authorization: Bearer abc123
 
 // Works with create/extend
 const api = neta.create({
-  prefix: 'https://api.example.com',
-  bearerToken: 'abc123',
+  prefix: "https://api.example.com",
+  bearerToken: "abc123",
 });
 ```
 
@@ -324,11 +334,16 @@ Arbitrary data passed through to hooks. Not sent with the request.
 
 ```js
 await neta.get(url, {
-  context: { token: 'abc123' },
+  context: { token: "abc123" },
   hooks: {
-    init: [(options) => {
-      options.headers = { ...options.headers, Authorization: `Bearer ${options.context.token}` };
-    }],
+    init: [
+      (options) => {
+        options.headers = {
+          ...options.headers,
+          Authorization: `Bearer ${options.context.token}`,
+        };
+      },
+    ],
   },
 });
 ```
@@ -340,7 +355,7 @@ Type: `typeof globalThis.fetch`
 Custom fetch implementation.
 
 ```js
-import { fetch } from 'undici';
+import { fetch } from "undici";
 
 const api = neta.create({ fetch });
 ```
@@ -352,9 +367,11 @@ Type: `(progress: { percent, transferredBytes, totalBytes }) => void`
 Download progress callback. Requires `ReadableStream` support.
 
 ```js
-await neta.get('https://example.com/large-file', {
+await neta.get("https://example.com/large-file", {
   onDownloadProgress: ({ percent, transferredBytes, totalBytes }) => {
-    console.log(`${Math.round(percent * 100)}% (${transferredBytes}/${totalBytes})`);
+    console.log(
+      `${Math.round(percent * 100)}% (${transferredBytes}/${totalBytes})`,
+    );
   },
 });
 ```
@@ -394,12 +411,14 @@ const form = await neta.get(url).formData();
 Parse response as JSON. Optionally validate against a [Standard Schema](https://github.com/standard-schema/standard-schema):
 
 ```js
-import { z } from 'zod';
+import { z } from "zod";
 
-const user = await neta.get('/user/1').json(z.object({
-  id: z.number(),
-  name: z.string(),
-}));
+const user = await neta.get("/user/1").json(
+  z.object({
+    id: z.number(),
+    name: z.string(),
+  }),
+);
 // Throws SchemaValidationError if validation fails
 ```
 
@@ -411,13 +430,13 @@ Create a new instance with default options:
 
 ```js
 const api = neta.create({
-  prefix: 'https://api.example.com',
-  bearerToken: 'my-token',
+  prefix: "https://api.example.com",
+  bearerToken: "my-token",
   timeout: 30000,
   retry: 3,
 });
 
-const data = await api.get('users').json();
+const data = await api.get("users").json();
 ```
 
 #### neta.extend(defaults?)
@@ -425,8 +444,8 @@ const data = await api.get('users').json();
 Alias for `neta.create()`. Creates a new instance by extending existing defaults:
 
 ```js
-const api = neta.create({ prefix: 'https://api.example.com' });
-const authApi = api.extend({ bearerToken: 'my-token' });
+const api = neta.create({ prefix: "https://api.example.com" });
+const authApi = api.extend({ bearerToken: "my-token" });
 ```
 
 ## Hooks
@@ -442,9 +461,14 @@ Called synchronously before anything else. Can mutate options directly.
 ```js
 neta.create({
   hooks: {
-    init: [(options) => {
-      options.headers = { ...options.headers, 'X-Request-Id': crypto.randomUUID() };
-    }],
+    init: [
+      (options) => {
+        options.headers = {
+          ...options.headers,
+          "X-Request-Id": crypto.randomUUID(),
+        };
+      },
+    ],
   },
 });
 ```
@@ -458,9 +482,11 @@ Called before each request. Return a `Request` to replace it, a `Response` to sh
 ```js
 neta.create({
   hooks: {
-    beforeRequest: [({ request }) => {
-      console.log(`${request.method} ${request.url}`);
-    }],
+    beforeRequest: [
+      ({ request }) => {
+        console.log(`${request.method} ${request.url}`);
+      },
+    ],
   },
 });
 ```
@@ -474,16 +500,21 @@ Called after a successful response. Return a `Response` to replace it, or `neta.
 ```js
 const api = neta.create({
   hooks: {
-    afterResponse: [async ({ request, response }) => {
-      if (response.status === 401) {
-        const token = await refreshToken();
-        return neta.retry({
-          request: new Request(request, {
-            headers: { ...Object.fromEntries(request.headers), Authorization: `Bearer ${token}` },
-          }),
-        });
-      }
-    }],
+    afterResponse: [
+      async ({ request, response }) => {
+        if (response.status === 401) {
+          const token = await refreshToken();
+          return neta.retry({
+            request: new Request(request, {
+              headers: {
+                ...Object.fromEntries(request.headers),
+                Authorization: `Bearer ${token}`,
+              },
+            }),
+          });
+        }
+      },
+    ],
   },
 });
 ```
@@ -497,12 +528,14 @@ Called before an error is thrown. Return an `Error` to replace it.
 ```js
 neta.create({
   hooks: {
-    beforeError: [({ error }) => {
-      if (error instanceof HTTPError) {
-        error.message = `API Error: ${error.response.status}`;
-      }
-      return error;
-    }],
+    beforeError: [
+      ({ error }) => {
+        if (error instanceof HTTPError) {
+          error.message = `API Error: ${error.response.status}`;
+        }
+        return error;
+      },
+    ],
   },
 });
 ```
@@ -519,14 +552,16 @@ Called before each retry attempt. Return:
 - nothing — proceed normally
 
 ```js
-import { stop } from 'neta';
+import { stop } from "@anmetric/neta";
 
 neta.create({
   hooks: {
-    beforeRetry: [({ error, retryCount }) => {
-      console.log(`Retry #${retryCount}: ${error.message}`);
-      if (retryCount > 3) return stop;
-    }],
+    beforeRetry: [
+      ({ error, retryCount }) => {
+        console.log(`Retry #${retryCount}: ${error.message}`);
+        if (retryCount > 3) return stop;
+      },
+    ],
   },
 });
 ```
@@ -538,15 +573,15 @@ neta.create({
 Thrown for non-2xx responses (when `throwHttpErrors` is true).
 
 ```js
-import { HTTPError } from 'neta';
+import { HTTPError } from "@anmetric/neta";
 
 try {
-  await neta.get('https://api.example.com/missing');
+  await neta.get("https://api.example.com/missing");
 } catch (error) {
   if (error instanceof HTTPError) {
     console.log(error.response.status); // 404
-    console.log(error.data);            // Auto-parsed response body
-    console.log(error.request);         // The Request object
+    console.log(error.data); // Auto-parsed response body
+    console.log(error.request); // The Request object
   }
 }
 ```
@@ -556,13 +591,13 @@ try {
 Thrown when a request exceeds the `timeout` or `totalTimeout`.
 
 ```js
-import { TimeoutError } from 'neta';
+import { TimeoutError } from "@anmetric/neta";
 
 try {
   await neta.get(url, { timeout: 1000 });
 } catch (error) {
   if (error instanceof TimeoutError) {
-    console.log('Request timed out:', error.request.url);
+    console.log("Request timed out:", error.request.url);
   }
 }
 ```
@@ -572,14 +607,14 @@ try {
 Thrown on network failures (DNS, connection refused, etc.).
 
 ```js
-import { NetworkError } from 'neta';
+import { NetworkError } from "@anmetric/neta";
 
 try {
-  await neta.get('https://nonexistent.invalid');
+  await neta.get("https://nonexistent.invalid");
 } catch (error) {
   if (error instanceof NetworkError) {
-    console.log('Network error:', error.message);
-    console.log('Cause:', error.cause);
+    console.log("Network error:", error.message);
+    console.log("Cause:", error.cause);
   }
 }
 ```
@@ -589,13 +624,13 @@ try {
 Thrown when JSON response fails schema validation.
 
 ```js
-import { SchemaValidationError } from 'neta';
+import { SchemaValidationError } from "@anmetric/neta";
 
 try {
   await neta.get(url).json(mySchema);
 } catch (error) {
   if (error instanceof SchemaValidationError) {
-    console.log('Validation issues:', error.issues);
+    console.log("Validation issues:", error.issues);
   }
 }
 ```
@@ -610,7 +645,7 @@ interface User {
   name: string;
 }
 
-const user = await neta.get('https://api.example.com/user/1').json<User>();
+const user = await neta.get("https://api.example.com/user/1").json<User>();
 // user is typed as User
 ```
 
