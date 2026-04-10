@@ -219,3 +219,103 @@ describe('neta', () => {
     }
   });
 });
+
+describe('ResponsePromise body methods', () => {
+  it('should support .text()', async () => {
+    const text = await neta.get(`${server.url}/text`).text();
+    expect(text).toBe('hello world');
+  });
+
+  it('should support .blob()', async () => {
+    const blob = await neta.get(`${server.url}/text`).blob();
+    expect(blob).toBeInstanceOf(Blob);
+    expect(await blob.text()).toBe('hello world');
+  });
+
+  it('should support .arrayBuffer()', async () => {
+    const buffer = await neta.get(`${server.url}/text`).arrayBuffer();
+    expect(buffer).toBeInstanceOf(ArrayBuffer);
+    expect(new TextDecoder().decode(buffer)).toBe('hello world');
+  });
+
+  it('should support .json() generic type', async () => {
+    const data = await neta.get(`${server.url}/json`).json<{ hello: string }>();
+    expect(data.hello).toBe('world');
+  });
+
+  it('should await directly as Response', async () => {
+    const response = await neta.get(`${server.url}/json`);
+    expect(response).toBeInstanceOf(Response);
+    expect(response.status).toBe(200);
+  });
+
+  it('should set Accept header from body shortcut', async () => {
+    const data = await neta
+      .get(`${server.url}/echo`)
+      .json<{ headers: Record<string, string> }>();
+    expect(data.headers.accept).toContain('application/json');
+  });
+
+  it('should not override existing Accept header', async () => {
+    const data = await neta
+      .get(`${server.url}/echo`, { headers: { Accept: 'text/csv' } })
+      .json<{ headers: Record<string, string> }>();
+    expect(data.headers.accept).toBe('text/csv');
+  });
+});
+
+describe('Instance creation', () => {
+  it('should chain extend calls', async () => {
+    const base = neta.create({ prefix: server.url });
+    const withAuth = base.extend({ headers: { 'x-auth': 'token' } });
+    const withMore = withAuth.extend({ headers: { 'x-extra': 'yes' } });
+
+    const data = await withMore.get('echo').json<{ headers: Record<string, string> }>();
+    expect(data.headers['x-auth']).toBe('token');
+    expect(data.headers['x-extra']).toBe('yes');
+  });
+
+  it('should merge hooks from base and extend', async () => {
+    const calls: string[] = [];
+    const base = neta.create({
+      hooks: { init: [() => calls.push('base')] },
+    });
+    const extended = base.extend({
+      hooks: { init: [() => calls.push('extended')] },
+    });
+
+    await extended.get(`${server.url}/json`);
+    expect(calls).toEqual(['base', 'extended']);
+  });
+});
+
+describe('parseJson', () => {
+  it('should call parseJson when calling .json() on body shortcut', async () => {
+    let called = false;
+    const data = await neta
+      .get(`${server.url}/json`, {
+        parseJson: (text: string) => {
+          called = true;
+          return JSON.parse(text);
+        },
+      })
+      .json<{ hello: string }>();
+
+    expect(called).toBe(true);
+    expect(data.hello).toBe('world');
+  });
+
+  it('should call parseJson when calling .json() on returned Response', async () => {
+    let called = false;
+    const response = await neta.get(`${server.url}/json`, {
+      parseJson: (text: string) => {
+        called = true;
+        return JSON.parse(text);
+      },
+    });
+
+    const data = await response.json();
+    expect(called).toBe(true);
+    expect(data).toEqual({ hello: 'world' });
+  });
+});

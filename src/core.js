@@ -55,6 +55,8 @@ function createManagedSignal(timeout, userSignal) {
   const controller = new AbortController();
   /** @type {ReturnType<typeof setTimeout> | undefined} */
   let timer;
+  /** @type {(() => void) | undefined} */
+  let onUserAbort;
 
   if (timeout !== false && typeof timeout === 'number') {
     timer = setTimeout(() => controller.abort('timeout'), timeout);
@@ -64,7 +66,8 @@ function createManagedSignal(timeout, userSignal) {
     if (userSignal.aborted) {
       controller.abort(userSignal.reason);
     } else {
-      userSignal.addEventListener('abort', () => controller.abort(userSignal.reason), { once: true });
+      onUserAbort = () => controller.abort(userSignal.reason);
+      userSignal.addEventListener('abort', onUserAbort, { once: true });
     }
   }
 
@@ -72,6 +75,7 @@ function createManagedSignal(timeout, userSignal) {
     signal: controller.signal,
     cleanup: () => {
       if (timer) clearTimeout(timer);
+      if (onUserAbort && userSignal) userSignal.removeEventListener('abort', onUserAbort);
     },
   };
 }
@@ -235,12 +239,14 @@ export function createResponsePromise(input, options) {
     let url = new URL(inputStr);
     url = appendSearchParams(url, options.searchParams);
 
-    // Build request init (strip neta-specific options)
+    // Build request init (strip neta-specific options, also signal to avoid
+    // leaking listeners on the user's AbortSignal via Request construction)
     const {
       prefix: _prefix, baseUrl: _baseUrl, retry, timeout, totalTimeout,
       hooks, searchParams, json, throwHttpErrors, fetch: fetchFn,
       parseJson, stringifyJson, context, _userSignal,
       onDownloadProgress, onUploadProgress, bearerToken: _bearerToken,
+      signal: _signal,
       ...requestInit
     } = options;
 
@@ -278,8 +284,16 @@ export function createResponsePromise(input, options) {
       const managed = createManagedSignal(effectiveTimeout, userSignal);
 
       let fetchRequest = currentRequest.clone();
-      if (onUploadProgress && fetchRequest.body && supportsRequestStreams) {
-        fetchRequest = streamRequest(fetchRequest, onUploadProgress, options.body);
+      if (onUploadProgress) {
+        if (typeof onUploadProgress !== 'function') {
+          throw new TypeError('The `onUploadProgress` option must be a function');
+        }
+        if (!supportsRequestStreams) {
+          throw new Error('Streams are not supported in this environment.');
+        }
+        if (fetchRequest.body) {
+          fetchRequest = streamRequest(fetchRequest, onUploadProgress, options.body);
+        }
       }
 
       try {
@@ -292,9 +306,9 @@ export function createResponsePromise(input, options) {
           throw new TimeoutError(currentRequest);
         }
         if (isNetworkError(error)) {
-          throw new NetworkError(currentRequest, { cause: error });
+          throw new NetworkError(currentRequest, { cause: /** @type {Error} */(error) });
         }
-        throw error;
+        throw /** @type {Error} */(error);
       }
     };
 
@@ -329,7 +343,7 @@ export function createResponsePromise(input, options) {
           retryCount: retryCount + 1,
         });
 
-        if (result instanceof Request) { currentRequest = result; break; }
+        if (result instanceof Request) { currentRequest = result; continue; }
         if (result instanceof Response) { retryCount++; return result; }
         if (result === stop) return stop;
       }
@@ -396,6 +410,25 @@ export function createResponsePromise(input, options) {
       return calculateDelay(retry, retryCount + 1);
     };
 
+    /**
+     * Run beforeError hooks, then throw the (possibly replaced) error.
+     * @param {Error} error
+     * @returns {Promise<never>}
+     */
+    const runBeforeErrorAndThrow = async (error) => {
+      let processedError = error;
+      for (const hook of hooks.beforeError) {
+        const hookResult = await hook({
+          request: currentRequest,
+          options: getNormalizedOptions(options),
+          error: processedError,
+          retryCount,
+        });
+        if (hookResult instanceof Error) processedError = hookResult;
+      }
+      throw processedError;
+    };
+
     // === Main request loop ===
     /** @type {Response} */
     let response;
@@ -406,10 +439,19 @@ export function createResponsePromise(input, options) {
         response = await doFetch();
         break;
       } catch (error) {
-        const retryDelay = await getRetryDelayForFetchError(error);
-        const retryResult = await attemptRetry(error, retryDelay);
-        if (retryResult === stop) return undefined;
-        if (retryResult instanceof Response) { response = retryResult; break; }
+        let retryDelay;
+        try {
+          retryDelay = await getRetryDelayForFetchError(/** @type {Error} */(error));
+        } catch {
+          await runBeforeErrorAndThrow(/** @type {Error} */(error));
+        }
+        try {
+          const retryResult = await attemptRetry(/** @type {Error} */(error), /** @type {number} */(retryDelay));
+          if (retryResult === stop) return undefined;
+          if (retryResult instanceof Response) { response = retryResult; break; }
+        } catch (retryError) {
+          await runBeforeErrorAndThrow(/** @type {Error} */(retryError));
+        }
       }
     }
 
@@ -437,19 +479,26 @@ export function createResponsePromise(input, options) {
           }
         }
       } catch (error) {
-        if (!(error instanceof ForceRetryError)) throw error;
+        if (!(error instanceof ForceRetryError)) {
+          await runBeforeErrorAndThrow(/** @type {Error} */(error));
+        }
+        const forceRetryError = /** @type {ForceRetryError} */(error);
 
         // Forced retry from afterResponse hook
-        const retryDelay = error.customDelay ?? calculateDelay(retry, retryCount + 1);
-        if (error.customRequest) currentRequest = error.customRequest;
-        const retryResult = await attemptRetry(error, retryDelay);
-        if (retryResult === stop) return undefined;
-        if (retryResult instanceof Response) {
-          response = retryResult;
-          responseFromHook = true;
+        const retryDelay = forceRetryError.customDelay ?? calculateDelay(retry, retryCount + 1);
+        if (forceRetryError.customRequest) currentRequest = forceRetryError.customRequest;
+        try {
+          const retryResult = await attemptRetry(forceRetryError, retryDelay);
+          if (retryResult === stop) return undefined;
+          if (retryResult instanceof Response) {
+            response = retryResult;
+            responseFromHook = true;
+            continue;
+          }
           continue;
+        } catch (retryError) {
+          await runBeforeErrorAndThrow(/** @type {Error} */(retryError));
         }
-        continue;
       }
 
       // Check HTTP errors
@@ -458,7 +507,9 @@ export function createResponsePromise(input, options) {
         : throwHttpErrors;
 
       if (!response.ok && response.type !== 'opaque' && shouldThrow) {
-        const error = new HTTPError(response, currentRequest, getNormalizedOptions(options));
+        // Consume a clone to populate error.data, leaving error.response readable
+        const responseForUser = response.clone();
+        const error = new HTTPError(responseForUser, currentRequest, getNormalizedOptions(options));
         error.data = await getResponseData(
           response,
           options.timeout === false ? 10_000 : options.timeout,
@@ -466,35 +517,30 @@ export function createResponsePromise(input, options) {
           currentRequest,
         );
 
-        if (responseFromHook) throw error;
+        if (responseFromHook) {
+          await runBeforeErrorAndThrow(error);
+        }
 
         // Try to retry
         let retryDelay;
         try {
           retryDelay = await getRetryDelayForHttpError(error);
         } catch {
-          // Run beforeError hooks, then throw
-          let processedError = error;
-          for (const hook of hooks.beforeError) {
-            const hookResult = await hook({
-              request: currentRequest,
-              options: getNormalizedOptions(options),
-              error: processedError,
-              retryCount,
-            });
-            if (hookResult instanceof Error) processedError = hookResult;
-          }
-          throw processedError;
+          await runBeforeErrorAndThrow(error);
         }
 
-        const retryResult = await attemptRetry(error, retryDelay);
-        if (retryResult === stop) return undefined;
-        if (retryResult instanceof Response) {
-          response = retryResult;
-          responseFromHook = false; // Allow further retries
+        try {
+          const retryResult = await attemptRetry(error, /** @type {number} */(retryDelay));
+          if (retryResult === stop) return undefined;
+          if (retryResult instanceof Response) {
+            response = retryResult;
+            responseFromHook = false; // Allow further retries
+            continue;
+          }
           continue;
+        } catch (retryError) {
+          await runBeforeErrorAndThrow(/** @type {Error} */(retryError));
         }
-        continue;
       }
 
       break;
@@ -533,13 +579,13 @@ export function createResponsePromise(input, options) {
   };
 
   for (const [type, mimeType] of Object.entries(responseTypes)) {
-    responsePromise[type] = async (schema) => {
+    responsePromise[type] = async (/** @type {import('../types/types.js').StandardSchema} */ schema) => {
       if (currentRequest) {
         currentRequest.headers.set('accept', currentRequest.headers.get('accept') || mimeType);
       }
 
-      const response = await innerPromise;
-      if (type !== 'json') return response[type]();
+      const response = /** @type {Response} */(await innerPromise);
+      if (type !== 'json') return (/** @type {any} */(response))[type]();
 
       const text = await response.text();
       if (text === '') {

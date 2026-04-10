@@ -207,17 +207,20 @@ export function delay(ms, options) {
       return;
     }
 
-    const timer = setTimeout(resolve, ms);
+    /** @type {(() => void) | undefined} */
+    let onAbort;
+
+    const timer = setTimeout(() => {
+      if (onAbort && signal) signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
 
     if (signal) {
-      signal.addEventListener(
-        'abort',
-        () => {
-          clearTimeout(timer);
-          reject(signal.reason ?? new DOMException('Aborted', 'AbortError'));
-        },
-        { once: true },
-      );
+      onAbort = () => {
+        clearTimeout(timer);
+        reject(signal.reason ?? new DOMException('Aborted', 'AbortError'));
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
     }
   });
 }

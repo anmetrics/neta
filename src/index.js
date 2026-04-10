@@ -8,7 +8,8 @@ import { mergeOptions, normalizeOptions } from './utils.js';
  * @returns {import('../types/types.js').NetaInstance}
  */
 export function createInstance(defaults) {
-  const fn = (input, options) => {
+  /** @type {any} */
+  const fn = (/** @type {string | URL | Request} */ input, /** @type {import('../types/types.js').Options} */ options) => {
     const merged = mergeOptions(defaults, options);
     const normalized = normalizeOptions(merged);
     // Stash user signal before we override it internally
@@ -17,10 +18,10 @@ export function createInstance(defaults) {
   };
 
   for (const method of HTTP_METHODS) {
-    fn[method] = (input, options) => fn(input, { ...options, method });
+    fn[method] = (/** @type {string | URL | Request} */ input, /** @type {import('../types/types.js').Options} */ options) => fn(input, { ...options, method });
   }
 
-  fn.create = (newDefaults) => createInstance(mergeOptions(defaults, newDefaults));
+  fn.create = (/** @type {import('../types/types.js').Options} */ newDefaults) => createInstance(mergeOptions(defaults, newDefaults));
   fn.extend = fn.create;
 
   /**
@@ -30,7 +31,7 @@ export function createInstance(defaults) {
    */
   fn.retry = (options) => new RetryMarker(options);
 
-  return fn;
+  return /** @type {import('../types/types.js').NetaInstance} */(fn);
 }
 
 const neta = createInstance();

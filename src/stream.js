@@ -7,7 +7,7 @@ export function streamResponse(response, onDownloadProgress) {
   const totalBytes = Number(response.headers.get('content-length')) || 0;
   let transferredBytes = 0;
 
-  const reader = response.body.getReader();
+  const reader = (/** @type {ReadableStream} */(response.body)).getReader();
 
   const stream = new ReadableStream({
     async pull(controller) {
@@ -49,7 +49,7 @@ export function streamRequest(request, onUploadProgress, originalBody) {
   const totalBytes = Number(request.headers.get('content-length')) || 0;
   let transferredBytes = 0;
 
-  const reader = request.body.getReader();
+  const reader = (/** @type {ReadableStream} */(request.body)).getReader();
 
   const stream = new ReadableStream({
     async pull(controller) {
@@ -74,11 +74,11 @@ export function streamRequest(request, onUploadProgress, originalBody) {
     },
   });
 
-  return new Request(request.url, {
+  return new Request(request.url, /** @type {RequestInit} */({
     method: request.method,
     headers: request.headers,
     body: stream,
     duplex: 'half',
     signal: request.signal,
-  });
+  }));
 }
