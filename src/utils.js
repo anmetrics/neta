@@ -163,6 +163,14 @@ export function normalizeOptions(options) {
     prefix: options.prefix ? String(options.prefix) : '',
   };
 
+  if (options.bearerToken !== undefined) {
+    const headers = new Headers(normalized.headers);
+    if (!headers.has('authorization')) {
+      headers.set('authorization', `Bearer ${options.bearerToken}`);
+    }
+    normalized.headers = headers;
+  }
+
   if (options.json !== undefined) {
     normalized.body = normalized.stringifyJson
       ? normalized.stringifyJson(options.json)

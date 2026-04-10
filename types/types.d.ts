@@ -107,6 +107,7 @@ export interface Options extends Omit<RequestInit, 'method'> {
   stringifyJson?: (value: unknown) => string;
   throwHttpErrors?: boolean | ((status: number) => boolean);
   fetch?: typeof globalThis.fetch;
+  bearerToken?: string;
   context?: Record<string, unknown>;
   onDownloadProgress?: (progress: DownloadProgress) => void;
   onUploadProgress?: (progress: UploadProgress) => void;

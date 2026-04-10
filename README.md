@@ -296,6 +296,25 @@ await neta.post(url, {
 });
 ```
 
+##### bearerToken
+
+Type: `string`
+
+Convenience option to set the `Authorization: Bearer <token>` header. If an `Authorization` header is already set explicitly, `bearerToken` will not override it.
+
+```js
+const data = await neta.get('https://api.example.com/me', {
+  bearerToken: 'abc123',
+}).json();
+// Sets header: Authorization: Bearer abc123
+
+// Works with create/extend
+const api = neta.create({
+  prefix: 'https://api.example.com',
+  bearerToken: 'abc123',
+});
+```
+
 ##### context
 
 Type: `Record<string, unknown>`\
@@ -393,7 +412,7 @@ Create a new instance with default options:
 ```js
 const api = neta.create({
   prefix: 'https://api.example.com',
-  headers: { Authorization: 'Bearer token' },
+  bearerToken: 'my-token',
   timeout: 30000,
   retry: 3,
 });
@@ -407,7 +426,7 @@ Alias for `neta.create()`. Creates a new instance by extending existing defaults
 
 ```js
 const api = neta.create({ prefix: 'https://api.example.com' });
-const authApi = api.extend({ headers: { Authorization: 'Bearer token' } });
+const authApi = api.extend({ bearerToken: 'my-token' });
 ```
 
 ## Hooks

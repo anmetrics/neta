@@ -168,7 +168,7 @@ function getNormalizedOptions(options) {
     hooks, json, parseJson, stringifyJson, searchParams,
     timeout, totalTimeout, throwHttpErrors, fetch,
     context, _userSignal, prefix, baseUrl,
-    onDownloadProgress, onUploadProgress,
+    onDownloadProgress, onUploadProgress, bearerToken,
     ...rest
   } = options;
   return Object.freeze(rest);
@@ -240,7 +240,7 @@ export function createResponsePromise(input, options) {
       prefix: _prefix, baseUrl: _baseUrl, retry, timeout, totalTimeout,
       hooks, searchParams, json, throwHttpErrors, fetch: fetchFn,
       parseJson, stringifyJson, context, _userSignal,
-      onDownloadProgress, onUploadProgress,
+      onDownloadProgress, onUploadProgress, bearerToken: _bearerToken,
       ...requestInit
     } = options;
 
