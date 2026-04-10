@@ -48,14 +48,14 @@ export const supportsRequestStreams = (() => {
     let duplexAccessed = false;
     const hasContentType = new Request(
       new URL('https://empty.invalid'),
-      {
+      /** @type {RequestInit} */({
         body: new ReadableStream(),
         method: 'POST',
         get duplex() {
           duplexAccessed = true;
           return 'half';
         },
-      },
+      }),
     ).headers.has('Content-Type');
     return duplexAccessed && !hasContentType;
   } catch {

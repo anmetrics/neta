@@ -292,9 +292,9 @@ export function createResponsePromise(input, options) {
           throw new TimeoutError(currentRequest);
         }
         if (isNetworkError(error)) {
-          throw new NetworkError(currentRequest, { cause: error });
+          throw new NetworkError(currentRequest, { cause: /** @type {Error} */(error) });
         }
-        throw error;
+        throw /** @type {Error} */(error);
       }
     };
 
@@ -406,8 +406,8 @@ export function createResponsePromise(input, options) {
         response = await doFetch();
         break;
       } catch (error) {
-        const retryDelay = await getRetryDelayForFetchError(error);
-        const retryResult = await attemptRetry(error, retryDelay);
+        const retryDelay = await getRetryDelayForFetchError(/** @type {Error} */(error));
+        const retryResult = await attemptRetry(/** @type {Error} */(error), retryDelay);
         if (retryResult === stop) return undefined;
         if (retryResult instanceof Response) { response = retryResult; break; }
       }
@@ -474,7 +474,7 @@ export function createResponsePromise(input, options) {
           retryDelay = await getRetryDelayForHttpError(error);
         } catch {
           // Run beforeError hooks, then throw
-          let processedError = error;
+          let processedError = /** @type {Error} */(error);
           for (const hook of hooks.beforeError) {
             const hookResult = await hook({
               request: currentRequest,
@@ -533,13 +533,13 @@ export function createResponsePromise(input, options) {
   };
 
   for (const [type, mimeType] of Object.entries(responseTypes)) {
-    responsePromise[type] = async (schema) => {
+    responsePromise[type] = async (/** @type {import('../types/types.js').StandardSchema} */ schema) => {
       if (currentRequest) {
         currentRequest.headers.set('accept', currentRequest.headers.get('accept') || mimeType);
       }
 
-      const response = await innerPromise;
-      if (type !== 'json') return response[type]();
+      const response = /** @type {Response} */(await innerPromise);
+      if (type !== 'json') return (/** @type {any} */(response))[type]();
 
       const text = await response.text();
       if (text === '') {
